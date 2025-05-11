@@ -306,12 +306,12 @@ class EditorLogic(GraphicEditor):
 
         # Запрашиваем новые размеры
         width, ok_w = QInputDialog.getInt(self, "Масштабирование с учетом содержимого",
-                                          "Введите новую ширину:", value=self.image.width)
+                                           "Введите новую ширину:", value=self.image.width)
         if not ok_w:
             return
 
         height, ok_h = QInputDialog.getInt(self, "Масштабирование с учетом содержимого",
-                                           "Введите новую высоту:", value=self.image.height)
+                                            "Введите новую высоту:", value=self.image.height)
         if not ok_h:
             return
 
@@ -324,161 +324,264 @@ class EditorLogic(GraphicEditor):
         self.history_list.addItem(f"Масштабирование с учетом содержимого: {width}x{height}")
 
     def content_aware_resize(self, img, target_width, target_height):
-        """Реализация алгоритма Seam Carving для масштабирования с учетом содержимого"""
+        """Упрощенная реализация алгоритма Seam Carving для масштабирования с учетом содержимого"""
+        # Конвертируем PIL Image в numpy array
         img_array = np.array(img)
+        
+        # Получаем текущие размеры
         current_height, current_width = img_array.shape[:2]
-
+        
         # Определяем, насколько нужно изменить размеры
         width_diff = target_width - current_width
         height_diff = target_height - current_height
+        
+        # Сначала изменяем ширину
+        result_image = img_array
+        
+        # Уменьшаем ширину
+        if width_diff < 0:
+            result_image = self.reduce_width(result_image, abs(width_diff))
+        # Увеличиваем ширину
+        elif width_diff > 0:
+            result_image = self.increase_width(result_image, width_diff)
+        
+        # Затем изменяем высоту
+        # Уменьшаем высоту
+        if height_diff < 0:
+            # Поворачиваем изображение, чтобы работать со строками как со столбцами
+            rotated = np.rot90(result_image, k=1)
+            # Уменьшаем ширину повернутого изображения
+            rotated = self.reduce_width(rotated, abs(height_diff))
+            # Возвращаем изображение в исходную ориентацию
+            result_image = np.rot90(rotated, k=3)
+        # Увеличиваем высоту
+        elif height_diff > 0:
+            # Поворачиваем изображение
+            rotated = np.rot90(result_image, k=1)
+            # Увеличиваем ширину повернутого изображения
+            rotated = self.increase_width(rotated, height_diff)
+            # Возвращаем изображение в исходную ориентацию
+            result_image = np.rot90(rotated, k=3)
+        
+        # Конвертируем обратно в PIL Image
+        return Image.fromarray(result_image.astype(np.uint8))
 
-        # Изменяем ширину
-        if width_diff < 0:  # Уменьшаем ширину
-            for i in range(abs(width_diff)):
-                # Находим и удаляем вертикальный шов
-                energy = self.compute_energy(img_array)
-                seam = self.find_vertical_seam(energy)
-                img_array = self.remove_vertical_seam(img_array, seam)
-        elif width_diff > 0:  # Увеличиваем ширину (простая реализация)
-            # Находим и сохраняем швы для последующего дублирования
-            seams = []
-            temp_img = np.copy(img_array)
-            for i in range(min(width_diff, 50)):  # Ограничение для производительности
-                energy = self.compute_energy(temp_img)
-                seam = self.find_vertical_seam(energy)
-                seams.append(seam)
-                temp_img = self.remove_vertical_seam(temp_img, seam)
-
-            # Дублируем швы в обратном порядке (от наименее важных к более важным)
-            for seam in reversed(seams):
-                img_array = self.duplicate_vertical_seam(img_array, seam)
-
-        # Изменяем высоту (аналогично ширине, но с транспонированным изображением)
-        if height_diff < 0:  # Уменьшаем высоту
-            for i in range(abs(height_diff)):
-                img_array = np.transpose(img_array, (1, 0, 2)) if len(img_array.shape) == 3 else np.transpose(img_array)
-                energy = self.compute_energy(img_array)
-                seam = self.find_vertical_seam(energy)
-                img_array = self.remove_vertical_seam(img_array, seam)
-                img_array = np.transpose(img_array, (1, 0, 2)) if len(img_array.shape) == 3 else np.transpose(img_array)
-        elif height_diff > 0:  # Увеличиваем высоту
-            seams = []
-            temp_img = np.copy(img_array)
-            temp_img = np.transpose(temp_img, (1, 0, 2)) if len(temp_img.shape) == 3 else np.transpose(temp_img)
-
-            for i in range(min(height_diff, 50)):
-                energy = self.compute_energy(temp_img)
-                seam = self.find_vertical_seam(energy)
-                seams.append(seam)
-                temp_img = self.remove_vertical_seam(temp_img, seam)
-
-            img_array = np.transpose(img_array, (1, 0, 2)) if len(img_array.shape) == 3 else np.transpose(img_array)
-            for seam in reversed(seams):
-                img_array = self.duplicate_vertical_seam(img_array, seam)
-            img_array = np.transpose(img_array, (1, 0, 2)) if len(img_array.shape) == 3 else np.transpose(img_array)
-
-        return Image.fromarray(img_array)
-
-    def compute_energy(self, img):
-        """Вычисляет энергию изображения с помощью оператора Собеля"""
-        if len(img.shape) == 3:
-            # Преобразуем RGB в grayscale для вычисления энергии
-            gray_img = np.mean(img, axis=2).astype(np.float64)
-        else:
-            gray_img = img.astype(np.float64)
-
+    def reduce_width(self, image, num_pixels):
+        """Уменьшает ширину изображения, удаляя швы с минимальной энергией"""
+        result = np.copy(image)
+        for i in range(num_pixels):
+            # Вычисляем энергию
+            energy = self.calc_energy_map(result)
+            # Вычисляем кумулятивную энергию
+            cumulative = self.calc_cumulative_energy(energy)
+            # Находим шов с минимальной энергией
+            seam = self.find_min_seam(cumulative)
+            # Удаляем шов
+            result = self.remove_seam(result, seam)
+        return result
+    
+    def increase_width(self, image, num_pixels):
+        """Увеличивает ширину изображения, добавляя швы"""
+        # Создаем копию исходного изображения
+        result = np.copy(image)
+        # Находим швы для дублирования
+        seams = []
+        temp = np.copy(result)
+        
+        for i in range(num_pixels):
+            # Вычисляем энергию
+            energy = self.calc_energy_map(temp)
+            # Вычисляем кумулятивную энергию
+            cumulative = self.calc_cumulative_energy(energy)
+            # Находим шов с минимальной энергией
+            seam = self.find_min_seam(cumulative)
+            seams.append(seam)
+            # Удаляем шов из временного изображения
+            temp = self.remove_seam(temp, seam)
+        
+        # Добавляем швы в исходное изображение
+        for seam in seams:
+            result = self.duplicate_seam(result, seam)
+        
+        return result
+    
+    def calc_energy_map(self, image):
+        """Вычисляет карту энергии изображения с помощью оператора Собеля"""
+        # Преобразуем в оттенки серого для упрощения расчетов
+        gray = np.mean(image, axis=2).astype(np.float64)
+        
         # Вычисляем градиенты с помощью оператора Собеля
-        sobelx = ndimage.sobel(gray_img, axis=1)
-        sobely = ndimage.sobel(gray_img, axis=0)
-
-        # Общая энергия - сумма абсолютных значений градиентов
-        return np.abs(sobelx) + np.abs(sobely)
-
-    def find_vertical_seam(self, energy):
-        """Находит вертикальный шов с минимальной энергией"""
+        energy_x = np.absolute(ndimage.sobel(gray, axis=1))
+        energy_y = np.absolute(ndimage.sobel(gray, axis=0))
+        
+        # Суммируем энергию
+        return energy_x + energy_y
+    
+    def calc_cumulative_energy(self, energy):
+        """Вычисляет кумулятивную карту энергии"""
         height, width = energy.shape
-
-        # Матрица кумулятивной энергии для динамического программирования
-        cumulative_energy = np.copy(energy)
+        cumulative = np.copy(energy)
+        
+        # Заполняем кумулятивную карту энергии
         for i in range(1, height):
             for j in range(width):
-                # Выбираем минимум из трех возможных предыдущих пикселей
-                if j == 0:
-                    cumulative_energy[i, j] += min(cumulative_energy[i - 1, j], cumulative_energy[i - 1, j + 1])
-                elif j == width - 1:
-                    cumulative_energy[i, j] += min(cumulative_energy[i - 1, j - 1], cumulative_energy[i - 1, j])
-                else:
-                    cumulative_energy[i, j] += min(cumulative_energy[i - 1, j - 1],
-                                                   cumulative_energy[i - 1, j],
-                                                   cumulative_energy[i - 1, j + 1])
-
-        # Восстановление пути (шва)
+                # Находим минимальную энергию из трех возможных путей
+                if j == 0:  # Левый край
+                    cumulative[i, j] += min(cumulative[i-1, j], cumulative[i-1, j+1])
+                elif j == width - 1:  # Правый край
+                    cumulative[i, j] += min(cumulative[i-1, j-1], cumulative[i-1, j])
+                else:  # Середина
+                    cumulative[i, j] += min(cumulative[i-1, j-1], cumulative[i-1, j], cumulative[i-1, j+1])
+        
+        return cumulative
+    
+    def cumulative_map_forward(self, image, energy_map):
+        """Вычисляет кумулятивную карту энергии для алгоритма forward energy"""
+        # Создаем ядра для вычисления матриц соседей
+        kernel_x = np.array([[0., 0., 0.], [-1., 0., 1.], [0., 0., 0.]], dtype=np.float64)
+        kernel_y_left = np.array([[0., 0., 0.], [0., 0., 1.], [0., -1., 0.]], dtype=np.float64)
+        kernel_y_right = np.array([[0., 0., 0.], [1., 0., 0.], [0., -1., 0.]], dtype=np.float64)
+        
+        # Вычисляем матрицы соседей
+        matrix_x = self.calc_neighbor_matrix(image, kernel_x)
+        matrix_y_left = self.calc_neighbor_matrix(image, kernel_y_left)
+        matrix_y_right = self.calc_neighbor_matrix(image, kernel_y_right)
+        
+        # Преобразуем все в float64 для предотвращения переполнения
+        energy_map = energy_map.astype(np.float64)
+        matrix_x = matrix_x.astype(np.float64)
+        matrix_y_left = matrix_y_left.astype(np.float64)
+        matrix_y_right = matrix_y_right.astype(np.float64)
+        
+        m, n = energy_map.shape
+        output = np.copy(energy_map)
+        
+        # Заполняем кумулятивную карту энергии с учетом forward energy
+        for row in range(1, m):
+            for col in range(n):
+                if col == 0:  # Левый край
+                    e_right = float(output[row - 1, col + 1]) + float(matrix_x[row - 1, col + 1]) + float(matrix_y_right[row - 1, col + 1])
+                    e_up = float(output[row - 1, col]) + float(matrix_x[row - 1, col])
+                    output[row, col] = float(energy_map[row, col]) + min(e_right, e_up)
+                elif col == n - 1:  # Правый край
+                    e_left = float(output[row - 1, col - 1]) + float(matrix_x[row - 1, col - 1]) + float(matrix_y_left[row - 1, col - 1])
+                    e_up = float(output[row - 1, col]) + float(matrix_x[row - 1, col])
+                    output[row, col] = float(energy_map[row, col]) + min(e_left, e_up)
+                else:  # Середина
+                    e_left = float(output[row - 1, col - 1]) + float(matrix_x[row - 1, col - 1]) + float(matrix_y_left[row - 1, col - 1])
+                    e_right = float(output[row - 1, col + 1]) + float(matrix_x[row - 1, col + 1]) + float(matrix_y_right[row - 1, col + 1])
+                    e_up = float(output[row - 1, col]) + float(matrix_x[row - 1, col])
+                    output[row, col] = float(energy_map[row, col]) + min(e_left, e_right, e_up)
+        
+        return output
+    
+    def calc_neighbor_matrix(self, image, kernel):
+        """Вычисляет матрицу соседей с помощью фильтра"""
+        b = image[:, :, 0]
+        g = image[:, :, 1]
+        r = image[:, :, 2]
+        
+        output = np.absolute(ndimage.convolve(b, kernel)) + \
+                 np.absolute(ndimage.convolve(g, kernel)) + \
+                 np.absolute(ndimage.convolve(r, kernel))
+        return output
+    
+    def find_min_seam(self, cumulative):
+        """Находит шов с минимальной энергией"""
+        height, width = cumulative.shape
+        # Массив для хранения индексов шва
         seam = np.zeros(height, dtype=np.int32)
-
-        # Находим индекс минимума в последней строке
-        seam[-1] = np.argmin(cumulative_energy[-1])
-
-        # Восстанавливаем путь снизу вверх
-        for i in range(height - 2, -1, -1):
-            j = seam[i + 1]
-
+        
+        # Находим минимальный элемент в последней строке
+        seam[-1] = np.argmin(cumulative[-1])
+        
+        # Идем снизу вверх и находим путь с минимальной энергией
+        for i in range(height-2, -1, -1):
+            j = seam[i+1]
+            # Обрабатываем крайние случаи
             if j == 0:
-                seam[i] = j if cumulative_energy[i, j] <= cumulative_energy[i, j + 1] else j + 1
-            elif j == width - 1:
-                seam[i] = j - 1 if cumulative_energy[i, j - 1] <= cumulative_energy[i, j] else j
+                seam[i] = np.argmin(cumulative[i, 0:2])
+            elif j == width-1:
+                seam[i] = width-1 + np.argmin(cumulative[i, width-2:width]) - 1
             else:
-                neighbors = [cumulative_energy[i, j - 1], cumulative_energy[i, j], cumulative_energy[i, j + 1]]
-                min_idx = np.argmin(neighbors)
-                seam[i] = j + (min_idx - 1)  # -1, 0 или +1
-
+                seam[i] = j + np.argmin(cumulative[i, j-1:j+2]) - 1
+        
         return seam
-
-    def remove_vertical_seam(self, img, seam):
-        """Удаляет вертикальный шов из изображения"""
-        height, width = img.shape[:2]
-
+    
+    def remove_seam(self, image, seam):
+        """Удаляет шов из изображения"""
+        height, width, channels = image.shape
         # Создаем новое изображение без шва
-        if len(img.shape) == 3:
-            new_img = np.zeros((height, width - 1, img.shape[2]), dtype=img.dtype)
-        else:
-            new_img = np.zeros((height, width - 1), dtype=img.dtype)
-
-        # Копируем все пиксели, кроме шва
+        result = np.zeros((height, width-1, channels), dtype=image.dtype)
+        
+        # Для каждой строки удаляем пиксель шва
         for i in range(height):
-            j_seam = seam[i]
-            if len(img.shape) == 3:
-                new_img[i, :j_seam] = img[i, :j_seam]
-                new_img[i, j_seam:] = img[i, j_seam + 1:]
-            else:
-                new_img[i, :j_seam] = img[i, :j_seam]
-                new_img[i, j_seam:] = img[i, j_seam + 1:]
-
-        return new_img
-
-    def duplicate_vertical_seam(self, img, seam):
-        """Дублирует вертикальный шов для увеличения размера"""
-        height, width = img.shape[:2]
-
+            # Индекс пикселя шва в текущей строке
+            j = seam[i]
+            # Копируем пиксели до шва
+            result[i, :j, :] = image[i, :j, :]
+            # Копируем пиксели после шва
+            result[i, j:, :] = image[i, j+1:, :]
+        
+        return result
+    
+    def duplicate_seam(self, image, seam):
+        """Дублирует шов в изображении"""
+        height, width, channels = image.shape
         # Создаем новое изображение с дополнительным столбцом
-        if len(img.shape) == 3:
-            new_img = np.zeros((height, width + 1, img.shape[2]), dtype=img.dtype)
-        else:
-            new_img = np.zeros((height, width + 1), dtype=img.dtype)
-
-        # Вставляем дублированные пиксели
+        result = np.zeros((height, width+1, channels), dtype=image.dtype)
+        
+        # Для каждой строки дублируем пиксель шва
         for i in range(height):
-            j_seam = seam[i]
-
-            if len(img.shape) == 3:
-                new_img[i, :j_seam] = img[i, :j_seam]
-                new_img[i, j_seam] = img[i, j_seam]  # Дублируем пиксель
-                new_img[i, j_seam + 1:] = img[i, j_seam:]
-            else:
-                new_img[i, :j_seam] = img[i, :j_seam]
-                new_img[i, j_seam] = img[i, j_seam]
-                new_img[i, j_seam + 1:] = img[i, j_seam:]
-
-        return new_img
+            # Индекс пикселя шва в текущей строке
+            j = seam[i]
+            
+            # Копируем пиксели до шва
+            result[i, :j, :] = image[i, :j, :]
+            
+            # Дублируем пиксель шва (среднее между текущим и соседним)
+            if j == 0:  # Левый край
+                result[i, j, :] = image[i, j, :]
+                result[i, j+1, :] = image[i, j, :]
+            elif j == width-1:  # Правый край
+                result[i, j, :] = image[i, j, :]
+                result[i, j+1, :] = image[i, j, :]
+            else:  # Середина
+                result[i, j, :] = image[i, j, :]
+                # Среднее между текущим и следующим пикселем
+                result[i, j+1, :] = (image[i, j, :] + image[i, j+1, :]) // 2
+            
+            # Копируем пиксели после шва
+            result[i, j+2:, :] = image[i, j+1:, :]
+        
+        return result
+    
+    def update_seams(self, remaining_seams, current_seam):
+        """Обновляет индексы оставшихся швов после добавления нового"""
+        updated_seams = []
+        for seam in remaining_seams:
+            # Создаем копию шва
+            updated_seam = seam.copy()
+            # Увеличиваем индексы для всех позиций, которые идут после добавленного шва
+            for i in range(len(updated_seam)):
+                if updated_seam[i] >= current_seam[i]:
+                    updated_seam[i] += 1
+            updated_seams.append(updated_seam)
+        return updated_seams
+    
+    def rotate_image(self, image, ccw):
+        """Поворачивает изображение на 90 градусов"""
+        m, n, ch = image.shape
+        output = np.zeros((n, m, ch), dtype=image.dtype)
+        
+        if ccw:  # Против часовой стрелки
+            # Поворот на 90 градусов против часовой стрелки
+            output = np.transpose(image, (1, 0, 2))[::-1]
+        else:  # По часовой стрелке
+            # Поворот на 90 градусов по часовой стрелке
+            output = np.transpose(image, (1, 0, 2))[:, ::-1]
+        
+        return output
 
 ###########################################################################################################
 

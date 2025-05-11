@@ -55,11 +55,11 @@ class GraphicEditor(QMainWindow):
         # кнопка закрытия для истории действий
         history_header_layout = QHBoxLayout()
         history_header_layout.setContentsMargins(0, 0, 0, 4)  # Уменьшаем отступ снизу
-        history_title = QLabel("История действий")
-        history_title.setStyleSheet("color: #F0F0F0; font-size: 12px; font-weight: bold;")
-        history_title.setAlignment(
+        self.history_title = QLabel("История действий")  # Сохраняем как атрибут класса
+        self.history_title.setStyleSheet("color: #F0F0F0; font-size: 12px; font-weight: bold;")
+        self.history_title.setAlignment(
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)  # Выравнивание по левому краю
-        history_header_layout.addWidget(history_title)
+        history_header_layout.addWidget(self.history_title)
 
         # spacer для отступа
         spacer = QWidget()
@@ -298,14 +298,17 @@ class GraphicEditor(QMainWindow):
         open_action.setObjectName("open_action")
         save_action = QAction("Сохранить", self)
         save_action.setObjectName("save_action")
+        save_action.setShortcut("Ctrl+S")  # Горячая клавиша Ctrl+S для сохранения
         file_menu.addAction(open_action)
         file_menu.addAction(save_action)
 
         edit_menu = menu.addMenu("Правка")
         undo_action = QAction("Отменить", self)
         undo_action.setObjectName("undo_action")
+        undo_action.setShortcut("Ctrl+Z")  # Горячая клавиша Ctrl+Z для отмены
         redo_action = QAction("Повторить", self)
         redo_action.setObjectName("redo_action")
+        redo_action.setShortcut("Ctrl+Y")  # Горячая клавиша Ctrl+Y для повтора
 
         # Добавляем действие для отображения истории
         self.history_action_text = "История действий"
@@ -373,9 +376,6 @@ class GraphicEditor(QMainWindow):
         image_menu.addAction(flip_vertical_action)
         image_menu.addAction(content_aware_action)
         image_menu.addMenu(crop_menu)
-        restore_original_action = QAction("Вернуть к оригиналу", self)
-        restore_original_action.setObjectName("restore_original_action")
-        image_menu.addAction(restore_original_action)
 
         filters_menu = menu.addMenu("Фильтры")
         grayscale_action = QAction("Градации серого", self)
@@ -465,7 +465,6 @@ class GraphicEditor(QMainWindow):
             'crop_4_3': self.findChild(QAction, 'crop_4_3_action'),
             'crop_16_9': self.findChild(QAction, 'crop_16_9_action'),
             'content_aware': self.findChild(QAction, 'content_aware_action'),
-            'restore_original': self.findChild(QAction, 'restore_original_action'),
             'toggle_theme': self.toggle_theme_action,  # Добавляем новое действие для переключения темы
         }
 
@@ -525,6 +524,10 @@ class GraphicEditor(QMainWindow):
                     }
                 """)
 
+            # Заголовок истории действий
+            if hasattr(self, 'history_title'):
+                self.history_title.setStyleSheet("color: #F0F0F0; font-size: 12px; font-weight: bold;")
+            
             # Кнопка закрытия истории
             if hasattr(self, 'close_history_button'):
                 self.close_history_button.setStyleSheet("""
@@ -678,6 +681,10 @@ class GraphicEditor(QMainWindow):
                     }
                 """)
 
+            # Заголовок истории действий
+            if hasattr(self, 'history_title'):
+                self.history_title.setStyleSheet("color: #333333; font-size: 12px; font-weight: bold;")  # Темный текст для светлой темы
+            
             # Кнопка закрытия истории
             if hasattr(self, 'close_history_button'):
                 self.close_history_button.setStyleSheet("""
