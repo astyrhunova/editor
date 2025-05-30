@@ -381,27 +381,25 @@ class EditorLogic(GraphicEditor):
         return result
     
     def increase_width(self, image, num_pixels):
-        """Увеличивает ширину изображения, добавляя швы"""
+        """Увеличивает ширину изображения, добавляя швы с плавной интерполяцией"""
         # Создаем копию исходного изображения
         result = np.copy(image)
-        # Находим швы для дублирования
-        seams = []
-        temp = np.copy(result)
         
+        # Добавляем швы по одному, пересчитывая карту энергии после каждого добавления
         for i in range(num_pixels):
             # Вычисляем энергию
-            energy = self.calc_energy_map(temp)
+            energy = self.calc_energy_map(result)
             # Вычисляем кумулятивную энергию
             cumulative = self.calc_cumulative_energy(energy)
             # Находим шов с минимальной энергией
             seam = self.find_min_seam(cumulative)
-            seams.append(seam)
-            # Удаляем шов из временного изображения
-            temp = self.remove_seam(temp, seam)
-        
-        # Добавляем швы в исходное изображение
-        for seam in seams:
+            # Добавляем шов с плавной интерполяцией
             result = self.duplicate_seam(result, seam)
+            
+            # Каждые 20 пикселей применяем сглаживание для устранения артефактов
+            # Уменьшаем частоту применения фильтра для сохранения яркости
+            if (i + 1) % 20 == 0 and i > 0:
+                result = self.apply_smooth_filter(result)
         
         return result
     
@@ -526,12 +524,12 @@ class EditorLogic(GraphicEditor):
         return result
     
     def duplicate_seam(self, image, seam):
-        """Дублирует шов в изображении"""
+        """Дублирует шов в изображении с плавной интерполяцией"""
         height, width, channels = image.shape
         # Создаем новое изображение с дополнительным столбцом
         result = np.zeros((height, width+1, channels), dtype=image.dtype)
         
-        # Для каждой строки дублируем пиксель шва
+        # Для каждой строки дублируем пиксель шва с плавной интерполяцией
         for i in range(height):
             # Индекс пикселя шва в текущей строке
             j = seam[i]
@@ -539,7 +537,7 @@ class EditorLogic(GraphicEditor):
             # Копируем пиксели до шва
             result[i, :j, :] = image[i, :j, :]
             
-            # Дублируем пиксель шва (среднее между текущим и соседним)
+            # Интерполируем пиксели вокруг шва для более плавного перехода
             if j == 0:  # Левый край
                 result[i, j, :] = image[i, j, :]
                 result[i, j+1, :] = image[i, j, :]
@@ -547,12 +545,24 @@ class EditorLogic(GraphicEditor):
                 result[i, j, :] = image[i, j, :]
                 result[i, j+1, :] = image[i, j, :]
             else:  # Середина
+                # Сохраняем текущий пиксель
                 result[i, j, :] = image[i, j, :]
-                # Среднее между текущим и следующим пикселем
-                result[i, j+1, :] = (image[i, j, :] + image[i, j+1, :]) // 2
+                
+                # Создаем новый пиксель с плавной интерполяцией
+                # Используем взвешенное среднее из соседних пикселей
+                left = image[i, max(0, j-1), :].astype(np.int32)
+                current = image[i, j, :].astype(np.int32)
+                right = image[i, min(width-1, j+1), :].astype(np.int32)
+                
+                # Вычисляем взвешенное среднее и преобразуем обратно в исходный тип
+                new_pixel = (left * 25 + current * 50 + right * 25) // 100
+                result[i, j+1, :] = new_pixel.astype(image.dtype)
             
             # Копируем пиксели после шва
             result[i, j+2:, :] = image[i, j+1:, :]
+        
+        # Сглаживаем область вокруг вставленных швов
+        result = self.smooth_seam_area(result, seam)
         
         return result
     
@@ -568,6 +578,61 @@ class EditorLogic(GraphicEditor):
                     updated_seam[i] += 1
             updated_seams.append(updated_seam)
         return updated_seams
+        
+    def smooth_seam_area(self, image, seam):
+        """Сглаживает область вокруг вставленного шва для устранения артефактов"""
+        height, width, channels = image.shape
+        result = np.copy(image)
+        
+        # Для каждой строки сглаживаем область вокруг шва
+        for i in range(height):
+            j = seam[i] + 1  # Индекс вставленного пикселя
+            
+            # Пропускаем края изображения
+            if j <= 1 or j >= width - 1:
+                continue
+                
+            # Применяем локальное сглаживание в области шва
+            # Используем окно 3x3 для сглаживания
+            for c in range(channels):
+                # Сглаживаем только вставленный пиксель и его соседей
+                window = np.array([image[i, j-1, c], image[i, j, c], image[i, j+1, c]])
+                # Применяем медианный фильтр для удаления выбросов
+                median_value = np.median(window).astype(image.dtype)
+                result[i, j, c] = median_value
+        
+        return result
+        
+    def apply_smooth_filter(self, image):
+        """Применяет легкое размытие для сглаживания артефактов"""
+        # Используем медианный фильтр вместо гауссова размытия для сохранения яркости
+        # Применяем фильтр только к областям с высокой частотой (швам)
+        
+        # Создаем маску краев (потенциальных швов)
+        edges = np.zeros_like(image[:,:,0], dtype=bool)
+        
+        # Используем оператор Собеля для обнаружения краев
+        for channel in range(image.shape[2]):
+            dx = ndimage.sobel(image[:,:,channel], axis=1)
+            dy = ndimage.sobel(image[:,:,channel], axis=0)
+            edge_strength = np.sqrt(dx**2 + dy**2)
+            # Выбираем только сильные края (потенциальные швы)
+            threshold = np.percentile(edge_strength, 95)  # Верхние 5% краев
+            edges = edges | (edge_strength > threshold)
+        
+        # Расширяем маску краев для захвата окрестности
+        edges = ndimage.binary_dilation(edges, iterations=1)
+        
+        # Применяем медианный фильтр только к обнаруженным краям
+        result = image.copy()
+        for channel in range(image.shape[2]):
+            channel_data = image[:,:,channel].copy()
+            filtered = ndimage.median_filter(channel_data, size=3)
+            # Применяем фильтр только к краям
+            channel_data[edges] = filtered[edges]
+            result[:,:,channel] = channel_data
+        
+        return result
     
     def rotate_image(self, image, ccw):
         """Поворачивает изображение на 90 градусов"""
